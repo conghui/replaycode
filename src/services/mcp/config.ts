@@ -960,8 +960,12 @@ export function getMcpConfigsByScope(
       }
     }
     case 'user': {
-      const mcpServers = getGlobalConfig().mcpServers
-      if (!mcpServers) {
+      // Read from ~/.claude.json (legacy) and ~/.claude/settings.json (new format)
+      // settings.json takes precedence over .claude.json
+      const legacyMcpServers = getGlobalConfig().mcpServers
+      const settingsMcpServers = (getSettingsForSource('userSettings') as any)?.mcpServers
+      const mcpServers = { ...legacyMcpServers, ...settingsMcpServers }
+      if (Object.keys(mcpServers).length === 0) {
         return { servers: {}, errors: [] }
       }
 
@@ -977,8 +981,13 @@ export function getMcpConfigsByScope(
       }
     }
     case 'local': {
-      const mcpServers = getCurrentProjectConfig().mcpServers
-      if (!mcpServers) {
+      // Read from project .claude.json (legacy) and .claude/settings.json (new format)
+      // settings.json takes precedence over .claude.json
+      const legacyMcpServers = getCurrentProjectConfig().mcpServers
+      const projectSettings = (getSettingsForSource('projectSettings') as any)?.mcpServers
+      const localSettings = (getSettingsForSource('localSettings') as any)?.mcpServers
+      const mcpServers = { ...legacyMcpServers, ...projectSettings, ...localSettings }
+      if (Object.keys(mcpServers).length === 0) {
         return { servers: {}, errors: [] }
       }
 

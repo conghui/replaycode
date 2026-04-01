@@ -8,7 +8,9 @@
     "prepare-src": "node scripts/prepare-src.mjs",
     "build": "npm run prepare-src && node scripts/build.mjs",
     "check": "npm run prepare-src && tsc --noEmit",
-    "start": "node dist/cli.js"
+    "start": "node dist/cli.js",
+    "test": "bash tests/run.sh",
+    "test:quick": "bash tests/run.sh --quick"
   },
   "engines": {
     "node": ">=18.0.0"

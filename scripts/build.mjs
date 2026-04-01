@@ -17,6 +17,29 @@ import { fileURLToPath } from 'node:url'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(__dirname, '..')
 const VERSION = '2.1.88'
+
+// ── Feature Flags ─────────────────────────────────────────────────────────────
+// Safe flags: these only unlock existing code in the bundle (no missing modules)
+const SAFE_FLAGS = [
+  'BASH_CLASSIFIER',        // Auto-classifies bash commands for safe/unsafe execution
+  'TRANSCRIPT_CLASSIFIER',  // Auto-mode (auto-classifier for tool permissions)
+  'SHOT_STATS',             // Tracks shot distribution metrics
+  'TOKEN_BUDGET',           // Token budget tracking for compaction
+  'PROMPT_CACHE_BREAK_DETECTION', // Detects prompt cache invalidation
+  'BUILTIN_EXPLORE_PLAN_AGENTS',  // Enables Explore & Plan agent definitions
+  'MESSAGE_ACTIONS',        // Message action keybindings & handlers
+  'QUICK_SEARCH',           // Quick search UI overlay
+]
+
+// Parse ENABLE_FLAGS from environment: comma-separated list of additional flags to enable
+// Example: ENABLE_FLAGS=COORDINATOR_MODE,FORK_SUBAGENT npm run build
+const extraFlags = (process.env.ENABLE_FLAGS || '').split(',').map(f => f.trim()).filter(Boolean)
+const ENABLED_FLAGS = new Set([...SAFE_FLAGS, ...extraFlags])
+
+if (extraFlags.length > 0) {
+  console.log(`⚡ Extra flags enabled: ${extraFlags.join(', ')}`)
+}
+console.log(`⚡ Total enabled flags: ${[...ENABLED_FLAGS].join(', ')}`)
 const BUILD = join(ROOT, 'build-src')
 const ENTRY = join(BUILD, 'entry.ts')
 const OUT_DIR = join(ROOT, 'dist')
@@ -71,10 +94,12 @@ for await (const file of walk(join(BUILD, 'src'))) {
   let src = await readFile(file, 'utf8')
   let changed = false
 
-  // 2a. feature('X') → false
-  const featureRe = /\bfeature\s*\(\s*['"][A-Z_]+['"]\s*\)/g
+  // 2a. feature('FLAG') → true (if enabled) or false (if disabled)
+  const featureRe = /\bfeature\s*\(\s*['"]([A-Z_]+)['"]\s*\)/g
   if (featureRe.test(src)) {
-    src = src.replace(/\bfeature\s*\(\s*['"][A-Z_]+['"]\s*\)/g, 'false')
+    src = src.replace(/\bfeature\s*\(\s*['"]([A-Z_]+)['"]\s*\)/g, (match, flag) => {
+      return ENABLED_FLAGS.has(flag) ? 'true' : 'false'
+    })
     changed = true
   }
 
@@ -148,9 +173,11 @@ await writeFile(join(BUILD, 'tsconfig.json'), JSON.stringify({
 }, null, 2), 'utf8')
 
 // Create a feature() shim that esbuild will inject into every module
+const enabledFlagsJSON = JSON.stringify([...ENABLED_FLAGS])
 await writeFile(join(BUILD, 'feature-shim.js'), `
-// Shim for bun:bundle feature() — always returns false in external builds
-export function feature(_flag) { return false; }
+// Shim for bun:bundle feature() — checks against enabled flags
+const _enabled = new Set(${enabledFlagsJSON});
+export function feature(_flag) { return _enabled.has(_flag); }
 `, 'utf8')
 
 console.log('✅ Phase 3: Created entry wrapper and build tsconfig')
@@ -215,7 +242,7 @@ for (let round = 1; round <= MAX_ROUNDS; round++) {
       '--format=cjs',
       `--outfile="${OUT_FILE}"`,
       externalFlags,
-      `--banner:js="function feature(_f){return false;}"`,
+      `--banner:js="var _enabledFlags=new Set(${enabledFlagsJSON.replace(/"/g, '\\"')});function feature(_f){return _enabledFlags.has(_f);}"`,
       '--allow-overwrite',
       '--log-level=error',
       '--log-limit=0',
