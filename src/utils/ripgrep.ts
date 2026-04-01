@@ -4,7 +4,7 @@ import memoize from 'lodash-es/memoize.js'
 import { homedir } from 'os'
 import * as path from 'path'
 import { logEvent } from 'src/services/analytics/index.js'
-import { fileURLToPath } from 'url'
+// fileURLToPath removed — not needed in CJS bundle
 import { isInBundledMode } from './bundledMode.js'
 import { logForDebugging } from './debug.js'
 import { isEnvDefinedFalsy } from './envUtils.js'
@@ -14,12 +14,9 @@ import { logError } from './log.js'
 import { getPlatform } from './platform.js'
 import { countCharInString } from './stringUtils.js'
 
-const __filename = fileURLToPath(import.meta.url)
-// we use node:path.join instead of node:url.resolve because the former doesn't encode spaces
-const __dirname = path.join(
-  __filename,
-  process.env.NODE_ENV === 'test' ? '../../../' : '../',
-)
+// Original: const __filename = fileURLToPath(import.meta.url)
+// const __dirname = path.join(__filename, '../')
+// In CJS bundle, __dirname is already provided by esbuild — no override needed
 
 type RipgrepConfig = {
   mode: 'system' | 'builtin' | 'embedded'

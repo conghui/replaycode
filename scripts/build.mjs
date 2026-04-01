@@ -1,25 +1,16 @@
 #!/usr/bin/env node
 /**
- * build.mjs — Best-effort build of Claude Code v2.1.88 from source
+ * build.mjs — Build Claude Code v2.1.88 from decompiled source
  *
- * ⚠️  IMPORTANT: A complete rebuild requires the Bun runtime's compile-time
- *     intrinsics (feature(), MACRO, bun:bundle). This script provides a
- *     best-effort build using esbuild. See KNOWN_ISSUES.md for details.
- *
- * What this script does:
- *   1. Copy src/ → build-src/ (original untouched)
- *   2. Replace `feature('X')` → `false`  (compile-time → runtime)
- *   3. Replace `MACRO.VERSION` etc → string literals
- *   4. Replace `import from 'bun:bundle'` → stub
- *   5. Create stubs for missing feature-gated modules
- *   6. Bundle with esbuild → dist/cli.js
- *
- * Requirements: Node.js >= 18, npm
- * Usage:       node scripts/build.mjs
+ * Strategy:
+ *   1. Copy src/ + stubs/ → build-src/
+ *   2. Transform: feature() → false, MACRO → literals, remove bun-bundle imports
+ *   3. Create entry wrapper + build tsconfig
+ *   4. Iteratively bundle with esbuild, creating stubs for missing modules
  */
 
 import { readdir, readFile, writeFile, mkdir, cp, rm, stat } from 'node:fs/promises'
-import { join, dirname } from 'node:path'
+import { join, dirname, resolve } from 'node:path'
 import { execSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
@@ -28,6 +19,9 @@ const ROOT = join(__dirname, '..')
 const VERSION = '2.1.88'
 const BUILD = join(ROOT, 'build-src')
 const ENTRY = join(BUILD, 'entry.ts')
+const OUT_DIR = join(ROOT, 'dist')
+const OUT_FILE = join(OUT_DIR, 'cli.cjs')
+const ESBUILD = join(ROOT, 'node_modules', '.bin', 'esbuild')
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -41,33 +35,27 @@ async function* walk(dir) {
 
 async function exists(p) { try { await stat(p); return true } catch { return false } }
 
-async function ensureEsbuild() {
-  try { execSync('npx esbuild --version', { stdio: 'pipe' }) }
-  catch {
-    console.log('📦 Installing esbuild...')
-    execSync('npm install --save-dev esbuild', { cwd: ROOT, stdio: 'inherit' })
-  }
-}
-
 // ══════════════════════════════════════════════════════════════════════════════
-// PHASE 1: Copy source
+// PHASE 1: Copy source AND stubs
 // ══════════════════════════════════════════════════════════════════════════════
 
+console.log('🔧 Phase 1: Copying source...')
 await rm(BUILD, { recursive: true, force: true })
 await mkdir(BUILD, { recursive: true })
 await cp(join(ROOT, 'src'), join(BUILD, 'src'), { recursive: true })
-console.log('✅ Phase 1: Copied src/ → build-src/')
+await cp(join(ROOT, 'stubs'), join(BUILD, 'stubs'), { recursive: true })
+console.log('✅ Phase 1: Copied src/ and stubs/ → build-src/')
 
 // ══════════════════════════════════════════════════════════════════════════════
 // PHASE 2: Transform source
 // ══════════════════════════════════════════════════════════════════════════════
 
+console.log('🔧 Phase 2: Transforming source...')
 let transformCount = 0
 
-// MACRO replacements
 const MACROS = {
   'MACRO.VERSION': `'${VERSION}'`,
-  'MACRO.BUILD_TIME': `''`,
+  'MACRO.BUILD_TIME': `'${new Date().toISOString()}'`,
   'MACRO.FEEDBACK_CHANNEL': `'https://github.com/anthropics/claude-code/issues'`,
   'MACRO.ISSUES_EXPLAINER': `'https://github.com/anthropics/claude-code/issues/new/choose'`,
   'MACRO.FEEDBACK_CHANNEL_URL': `'https://github.com/anthropics/claude-code/issues'`,
@@ -84,7 +72,8 @@ for await (const file of walk(join(BUILD, 'src'))) {
   let changed = false
 
   // 2a. feature('X') → false
-  if (/\bfeature\s*\(\s*['"][A-Z_]+['"]\s*\)/.test(src)) {
+  const featureRe = /\bfeature\s*\(\s*['"][A-Z_]+['"]\s*\)/g
+  if (featureRe.test(src)) {
     src = src.replace(/\bfeature\s*\(\s*['"][A-Z_]+['"]\s*\)/g, 'false')
     changed = true
   }
@@ -97,17 +86,30 @@ for await (const file of walk(join(BUILD, 'src'))) {
     }
   }
 
-  // 2c. Remove bun:bundle import (feature() is already replaced)
-  if (src.includes("from 'bun:bundle'") || src.includes('from "bun:bundle"')) {
-    src = src.replace(/import\s*\{\s*feature\s*\}\s*from\s*['"]bun:bundle['"];?\n?/g, '// feature() replaced with false at build time\n')
-    changed = true
-  }
+  // 2c. REMOVE all feature imports (bun:bundle and stubs/bun-bundle)
+  // feature() will be provided globally via --banner:js
+  const before = src
+  src = src.replace(/import\s*\{\s*feature\s*\}\s*from\s*['"][^'"]*['"];?\s*\n?/g, (match) => {
+    // Only remove if it's a feature import from bun:bundle or stubs/bun-bundle
+    if (match.includes('bun:bundle') || match.includes('bun-bundle')) {
+      return '// feature() provided globally\n'
+    }
+    return match
+  })
+  if (src !== before) changed = true
 
-  // 2d. Remove type-only import of global.d.ts
-  if (src.includes("import '../global.d.ts'") || src.includes("import './global.d.ts'")) {
-    src = src.replace(/import\s*['"][.\/]*global\.d\.ts['"];?\n?/g, '')
-    changed = true
-  }
+  // 2d. Replace import.meta.url with CJS equivalent
+  const before3 = src
+  src = src.replace(
+    /fileURLToPath\s*\(\s*import\.meta\.url\s*\)/g,
+    '__filename'
+  )
+  if (src !== before3) changed = true
+
+  // 2e. Remove global.d.ts imports
+  const before2 = src
+  src = src.replace(/import\s*['"][^'"]*global\.d\.ts['"];?\s*\n?/g, '')
+  if (src !== before2) changed = true
 
   if (changed) {
     await writeFile(file, src, 'utf8')
@@ -117,28 +119,86 @@ for await (const file of walk(join(BUILD, 'src'))) {
 console.log(`✅ Phase 2: Transformed ${transformCount} files`)
 
 // ══════════════════════════════════════════════════════════════════════════════
-// PHASE 3: Create entry wrapper
+// PHASE 3: Create entry wrapper + tsconfig
 // ══════════════════════════════════════════════════════════════════════════════
 
-await writeFile(ENTRY, `#!/usr/bin/env node
-// Claude Code v${VERSION} — built from source
-// Copyright (c) Anthropic PBC. All rights reserved.
+await writeFile(ENTRY, `// Claude Code v${VERSION} — built from source
 import './src/entrypoints/cli.tsx'
 `, 'utf8')
-console.log('✅ Phase 3: Created entry wrapper')
+
+await writeFile(join(BUILD, 'tsconfig.json'), JSON.stringify({
+  compilerOptions: {
+    target: "ES2022",
+    module: "ESNext",
+    moduleResolution: "bundler",
+    esModuleInterop: true,
+    allowSyntheticDefaultImports: true,
+    strict: false,
+    skipLibCheck: true,
+    resolveJsonModule: true,
+    jsx: "react-jsx",
+    baseUrl: ".",
+    paths: { "bun:bundle": ["stubs/bun-bundle.ts"] },
+    types: ["node"],
+    lib: ["ES2022", "DOM"],
+    noEmit: true,
+  },
+  include: ["src/**/*", "stubs/**/*"],
+  exclude: ["node_modules"],
+}, null, 2), 'utf8')
+
+// Create a feature() shim that esbuild will inject into every module
+await writeFile(join(BUILD, 'feature-shim.js'), `
+// Shim for bun:bundle feature() — always returns false in external builds
+export function feature(_flag) { return false; }
+`, 'utf8')
+
+console.log('✅ Phase 3: Created entry wrapper and build tsconfig')
 
 // ══════════════════════════════════════════════════════════════════════════════
-// PHASE 4: Iterative stub + bundle
+// PHASE 4: Stub internal packages + iterative bundle
 // ══════════════════════════════════════════════════════════════════════════════
 
-await ensureEsbuild()
+// Create stubs for internal/unavailable packages
+// Create stubs for internal/native packages with proper exports
+const internalStubs = {
+  '@ant/claude-for-chrome-mcp': `
+export const BROWSER_TOOLS = []
+export function createClaudeForChromeMcpServer() { return {} }
+export default {}
+`,
+  'color-diff-napi': `
+export class ColorDiff { static fromRaw() { return new ColorDiff() }; render() { return '' } }
+export class ColorFile { static fromRaw() { return new ColorFile() }; render() { return '' } }
+export function getSyntaxTheme() { return {} }
+export default {}
+`,
+  'modifiers-napi': `
+export default {}
+`,
+  'sharp': `
+export default function sharp() { return { metadata: async () => ({}), resize: () => sharp(), toBuffer: async () => Buffer.from('') } }
+`,
+}
+for (const [pkg, code] of Object.entries(internalStubs)) {
+  const pkgDir = join(ROOT, 'node_modules', pkg)
+  await mkdir(pkgDir, { recursive: true }).catch(() => {})
+  await writeFile(join(pkgDir, 'package.json'), JSON.stringify({
+    name: pkg, version: '0.0.0', type: 'module', main: 'index.js'
+  }), 'utf8')
+  await writeFile(join(pkgDir, 'index.js'), code, 'utf8')
+  console.log(`   Created stub: ${pkg}`)
+}
 
-const OUT_DIR = join(ROOT, 'dist')
 await mkdir(OUT_DIR, { recursive: true })
-const OUT_FILE = join(OUT_DIR, 'cli.js')
 
-// Run up to 5 rounds of: esbuild → collect missing → create stubs → retry
-const MAX_ROUNDS = 5
+// Packages that must be external (only truly unavailable ones)
+const EXTERNAL_PKGS = [
+  'bun:*',
+]
+const externalFlags = EXTERNAL_PKGS.map(p => `--external:${p}`).join(' ')
+
+const MAX_ROUNDS = 15
 let succeeded = false
 
 for (let round = 1; round <= MAX_ROUNDS; round++) {
@@ -146,100 +206,202 @@ for (let round = 1; round <= MAX_ROUNDS; round++) {
 
   let esbuildOutput = ''
   try {
-    esbuildOutput = execSync([
-      'npx esbuild',
+    execSync([
+      `"${ESBUILD}"`,
       `"${ENTRY}"`,
       '--bundle',
       '--platform=node',
       '--target=node18',
-      '--format=esm',
+      '--format=cjs',
       `--outfile="${OUT_FILE}"`,
-      `--banner:js=$'#!/usr/bin/env node\\n// Claude Code v${VERSION} (built from source)\\n// Copyright (c) Anthropic PBC. All rights reserved.\\n'`,
-      '--packages=external',
-      '--external:bun:*',
+      externalFlags,
+      `--banner:js="function feature(_f){return false;}"`,
       '--allow-overwrite',
       '--log-level=error',
       '--log-limit=0',
       '--sourcemap',
+      `--tsconfig="${join(BUILD, 'tsconfig.json')}"`,
+      '--loader:.md=text',
+      '--loader:.txt=text',
     ].join(' '), {
-      cwd: ROOT,
+      cwd: BUILD,
       stdio: ['pipe', 'pipe', 'pipe'],
       shell: true,
-    }).stderr?.toString() || ''
+    })
     succeeded = true
     break
   } catch (e) {
     esbuildOutput = (e.stderr?.toString() || '') + (e.stdout?.toString() || '')
   }
 
-  // Parse missing modules
-  const missingRe = /Could not resolve "([^"]+)"/g
-  const missing = new Set()
-  let m
-  while ((m = missingRe.exec(esbuildOutput)) !== null) {
-    const mod = m[1]
-    if (!mod.startsWith('node:') && !mod.startsWith('bun:') && !mod.startsWith('/')) {
-      missing.add(mod)
-    }
-  }
+  // Parse errors
+  const blocks = esbuildOutput.split('✘ [ERROR]')
+  const resolvedPaths = new Map()
+  let totalMissing = 0
+  const exportErrors = []
+  const syntaxErrors = []
 
-  if (missing.size === 0) {
-    // No more missing modules but still errors — check what
-    const errLines = esbuildOutput.split('\n').filter(l => l.includes('ERROR')).slice(0, 5)
-    console.log('❌ Unrecoverable errors:')
-    errLines.forEach(l => console.log('   ' + l))
-    break
-  }
+  for (const block of blocks) {
+    // "Could not resolve" errors
+    const modMatch = block.match(/Could not resolve "([^"]+)"/)
+    if (modMatch) {
+      const mod = modMatch[1]
+      if (mod.startsWith('node:') || mod.startsWith('bun:')) continue
+      totalMissing++
 
-  console.log(`   Found ${missing.size} missing modules, creating stubs...`)
+      const srcMatch = block.match(/^\s+(src\/[^\s:]+):\d+:\d+:/m)
+      if (!srcMatch) continue
+      const sourceDir = join(BUILD, dirname(srcMatch[1]))
+      const resolved = resolve(sourceDir, mod)
 
-  // Create stubs
-  let stubCount = 0
-  for (const mod of missing) {
-    // Resolve relative path from the file that imports it — but since we
-    // don't have that info easily, create stubs at multiple likely locations
-    const cleanMod = mod.replace(/^\.\//, '')
-
-    // Text assets → empty file
-    if (/\.(txt|md|json)$/.test(cleanMod)) {
-      const p = join(BUILD, 'src', cleanMod)
-      await mkdir(dirname(p), { recursive: true }).catch(() => {})
-      if (!await exists(p)) {
-        await writeFile(p, cleanMod.endsWith('.json') ? '{}' : '', 'utf8')
-        stubCount++
+      if (!resolvedPaths.has(resolved)) resolvedPaths.set(resolved, new Set())
+      const importLine = block.match(/import\s*\{([^}]+)\}\s*from/)
+      if (importLine) {
+        for (const name of importLine[1].split(',').map(s => s.trim().split(/\s+as\s+/)[0])) {
+          resolvedPaths.get(resolved).add(name)
+        }
       }
       continue
     }
 
-    // JS/TS modules → export empty
-    if (/\.[tj]sx?$/.test(cleanMod)) {
-      for (const base of [join(BUILD, 'src'), join(BUILD, 'src', 'src')]) {
-        const p = join(base, cleanMod)
-        await mkdir(dirname(p), { recursive: true }).catch(() => {})
-        if (!await exists(p)) {
-          const name = cleanMod.split('/').pop().replace(/\.[tj]sx?$/, '')
-          const safeName = name.replace(/[^a-zA-Z0-9_$]/g, '_') || 'stub'
-          await writeFile(p, `// Auto-generated stub\nexport default function ${safeName}() {}\nexport const ${safeName} = () => {}\n`, 'utf8')
-          stubCount++
+    // "No matching export" errors
+    const exportMatch = block.match(/No matching export in "([^"]+)" for import "([^"]+)"/)
+    if (exportMatch) {
+      exportErrors.push({ file: join(BUILD, exportMatch[1]), name: exportMatch[2] })
+      continue
+    }
+
+    // Syntax errors (from bad stubs)
+    const syntaxMatch = block.match(/Expected .+ but found/)
+    if (syntaxMatch) {
+      syntaxErrors.push(block.slice(0, 200))
+    }
+  }
+
+  // Fix export errors
+  let exportFixCount = 0
+  for (const { file, name } of exportErrors) {
+    if (await exists(file)) {
+      let content = await readFile(file, 'utf8')
+      if (!content.includes(`export const ${name}`) && !content.includes(`export class ${name}`) && !content.includes(`export type ${name}`)) {
+        if (/^[A-Z]/.test(name)) {
+          content += `\nexport class ${name} {}\n`
+        } else {
+          content += `\nexport const ${name} = undefined\n`
         }
+        await writeFile(file, content, 'utf8')
+        exportFixCount++
       }
     }
   }
-  console.log(`   Created ${stubCount} stubs`)
+
+  if (totalMissing === 0 && exportErrors.length === 0) {
+    const errLines = esbuildOutput.split('\n').filter(l => l.includes('ERROR')).slice(0, 15)
+    console.log('❌ Remaining errors:')
+    errLines.forEach(l => console.log('   ' + l))
+    break
+  }
+
+  console.log(`   Missing: ${totalMissing} modules (${resolvedPaths.size} unique), ${exportErrors.length} export errors`)
+
+  // Create stubs for missing modules
+  let stubCount = 0
+  for (const [resolved, importNames] of resolvedPaths) {
+    // Check if already exists
+    let alreadyExists = false
+    for (const ext of ['', '.ts', '.tsx', '.js', '.jsx', '/index.ts', '/index.tsx', '/index.js']) {
+      if (await exists(resolved + ext)) { alreadyExists = true; break }
+    }
+    if (alreadyExists) continue
+
+    let targetPath = resolved
+    if (!/\.[a-z]+$/.test(targetPath)) targetPath += '.ts'
+    if (targetPath.endsWith('.js')) targetPath = targetPath.replace(/\.js$/, '.ts')
+
+    await mkdir(dirname(targetPath), { recursive: true }).catch(() => {})
+
+    if (/\.(txt|md)$/.test(targetPath)) {
+      await writeFile(targetPath, '', 'utf8')
+      stubCount++
+      continue
+    }
+    if (targetPath.endsWith('.json')) {
+      await writeFile(targetPath, '{}', 'utf8')
+      stubCount++
+      continue
+    }
+
+    // Scan source to find ALL expected exports from this module
+    const valueNames = new Set(importNames)
+    const typeNames = new Set()
+    const modBasename = resolved.split('/').pop().replace(/\.[tj]sx?$/, '')
+
+    try {
+      const searchOutput = execSync(
+        `grep -rh "from.*${modBasename}" "${join(BUILD, 'src')}" 2>/dev/null || true`,
+        { encoding: 'utf8', timeout: 5000 }
+      )
+      for (const line of searchOutput.split('\n')) {
+        // import type { X } from '...'
+        const typeImport = line.match(/import\s+type\s*\{([^}]+)\}\s*from/)
+        if (typeImport) {
+          for (const n of typeImport[1].split(',').map(s => s.trim().split(/\s+as\s+/)[0])) {
+            if (n && /^[a-zA-Z_$]/.test(n)) typeNames.add(n)
+          }
+          continue
+        }
+        // import { type X, Y } from '...'
+        const mixedImport = line.match(/import\s*\{([^}]+)\}\s*from/)
+        if (mixedImport) {
+          for (let n of mixedImport[1].split(',').map(s => s.trim())) {
+            n = n.split(/\s+as\s+/)[0]
+            if (n.startsWith('type ')) {
+              const tn = n.replace(/^type\s+/, '')
+              if (tn && /^[a-zA-Z_$]/.test(tn)) typeNames.add(tn)
+            } else if (n && /^[a-zA-Z_$]/.test(n)) {
+              valueNames.add(n)
+            }
+          }
+          continue
+        }
+        // import X from '...'
+        const defM = line.match(/import\s+(\w+)\s+from/)
+        if (defM && defM[1] !== 'type') valueNames.add(defM[1])
+      }
+    } catch {}
+
+    let stub = `// Auto-generated stub for missing module\n`
+    for (const name of typeNames) {
+      stub += `export type ${name} = any\n`
+    }
+    for (const name of valueNames) {
+      if (name === 'default') continue
+      const clean = name.replace(/^type\s+/, '')
+      if (!clean || typeNames.has(clean)) continue
+      stub += /^[A-Z]/.test(clean) ? `export class ${clean} {}\n` : `export const ${clean} = undefined\n`
+    }
+    stub += `export default {}\n`
+    await writeFile(targetPath, stub, 'utf8')
+    stubCount++
+  }
+
+  console.log(`   Created ${stubCount} stubs, fixed ${exportFixCount} exports`)
+
+  if (stubCount === 0 && exportFixCount === 0) {
+    console.log('   ⚠️  No progress. Dumping errors:')
+    const lines = esbuildOutput.split('\n').filter(l => l.includes('ERROR')).slice(0, 15)
+    lines.forEach(l => console.log('   ' + l))
+    break
+  }
 }
 
 if (succeeded) {
   const size = (await stat(OUT_FILE)).size
   console.log(`\n✅ Build succeeded: ${OUT_FILE}`)
   console.log(`   Size: ${(size / 1024 / 1024).toFixed(1)}MB`)
-  console.log(`\n   Usage:  node ${OUT_FILE} --version`)
-  console.log(`           node ${OUT_FILE} -p "Hello"`)
+  console.log(`\n   Test:  node ${OUT_FILE} --version`)
+  console.log(`          node ${OUT_FILE} -p "Hello"`)
 } else {
   console.error('\n❌ Build failed after all rounds.')
-  console.error('   The transformed source is in build-src/ for inspection.')
-  console.error('\n   To fix manually:')
-  console.error('   1. Check build-src/ for the transformed files')
-  console.error('   2. Create missing stubs in build-src/src/')
-  console.error('   3. Re-run: node scripts/build.mjs')
   process.exit(1)
 }

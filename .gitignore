@@ -1,3 +1,15 @@
 node_modules/
 build-src/
 dist/
+
+# Generated stubs (prepare-src leaks to root)
+/assistant/
+/bridge/
+/coordinator/
+/proactive/
+/services/
+/skills/
+/memdir/
+/jobs/
+/messages/
+/components/
