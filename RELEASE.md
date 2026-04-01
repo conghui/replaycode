@@ -1,7 +1,8 @@
-# Claude Code v2.1.88 — Open Source Build from Decompiled Source
+# ReplayCode — Open Source Build from Decompiled Claude Code Source
 
-> Successfully rebuilt the Claude Code CLI from decompiled TypeScript source.
+> Successfully rebuilt the Claude Code CLI (v2.1.88) from decompiled TypeScript source.
 > Full API interaction, tool execution, and headless mode working end-to-end.
+> **Current capability: equivalent to Claude Code v2.1.88.** Help us close the gap to the latest version.
 
 ## What Is This?
 
@@ -163,6 +164,12 @@ The build solves several challenges in reconstructing a working CLI from decompi
 - **Runtime**: Node.js >= 18
 - **Build time**: ~15 seconds
 - **API**: Uses `@anthropic-ai/sdk` for Claude API calls
+
+## Version & Roadmap
+
+ReplayCode currently implements the full feature set of **Claude Code v2.1.88** (May 2025). The official Claude Code has since added many new capabilities. Our goal is to progressively close this gap as a community.
+
+See [ANNOUNCEMENT.md](ANNOUNCEMENT.md) for the detailed roadmap and how to contribute.
 
 ## Disclaimer
 

@@ -1,7 +1,7 @@
 {
-  "name": "@anthropic-ai/claude-code-source",
+  "name": "replaycode",
   "version": "2.1.88",
-  "description": "Claude Code v2.1.88 — decompiled source for research",
+  "description": "ReplayCode — open-source rebuild of Claude Code from decompiled source",
   "type": "module",
   "private": true,
   "scripts": {

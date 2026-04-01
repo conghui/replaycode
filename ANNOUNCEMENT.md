@@ -1,4 +1,4 @@
-# We Rebuilt Claude Code from Decompiled Source — And It Actually Works
+# ReplayCode: We Rebuilt Claude Code from Decompiled Source — And It Actually Works
 
 ## TL;DR
 
@@ -79,8 +79,8 @@ $ node src/weather.mjs Tokyo
 ## Build It Yourself
 
 ```bash
-git clone https://github.com/conghui/claude-code-source-code.git
-cd claude-code-source-code
+git clone https://github.com/conghui/replaycode.git
+cd replaycode
 npm install
 node scripts/build.mjs    # → dist/cli.cjs (26.5MB, ~15 seconds)
 
@@ -101,23 +101,45 @@ Rebuilding wasn't straightforward. Here's what we had to solve:
 | Native NAPI modules (`color-diff-napi`, `sharp`) | Pure JS stub replacements |
 | Internal packages (`@ant/claude-for-chrome-mcp`) | Local stubs with correct exports |
 
-## What's Next
+## Where We Are — and Where We're Going
 
-This is the MVP — headless mode with core tools. Still to come:
-- Interactive REPL mode (Ink/React terminal UI)
-- MCP server connections
-- Full plugin/skill system
+**ReplayCode is currently equivalent to Claude Code v2.1.88** — the version released in late May 2025. At that point, Claude Code already had:
 
-## Star & Contribute
+- 40+ built-in tools (Bash, FileRead/Write/Edit, Grep, Glob, WebFetch, Agent, etc.)
+- Multi-turn agentic loop with streaming
+- Full permission model and cost tracking
+- Headless mode with JSON output
 
-If you find this useful for understanding how agentic coding tools work under the hood:
+Meanwhile, **the official Claude Code has continued evolving rapidly** — newer versions have added interactive REPL improvements, MCP server support, enhanced multi-agent coordination, voice mode, and more.
 
-⭐ **Star the repo**: [github.com/conghui/claude-code-source-code](https://github.com/conghui/claude-code-source-code)
+**The gap between v2.1.88 and the latest Claude Code is our opportunity.** Every missing feature is a chance for the community to understand, implement, and innovate.
 
-PRs welcome — especially for:
-- Getting interactive mode working
-- MCP support
-- Additional tool verification
+## Roadmap: Closing the Gap
+
+| Priority | Feature | Status |
+|----------|---------|--------|
+| P0 | Interactive REPL mode (Ink/React terminal UI) | Not started |
+| P0 | MCP server connections | Not started |
+| P1 | Full plugin/skill system | Not started |
+| P1 | Multi-agent coordinator mode | Stubbed |
+| P2 | Voice mode (push-to-talk) | Stubbed |
+| P2 | KAIROS autonomous agent mode | Stubbed |
+
+## Join Us — Build the Open Alternative
+
+ReplayCode is the **first and only open-source rebuild of Claude Code that actually runs**. We've proven the foundation works. Now we need the community to help push it forward.
+
+⭐ **Star the repo**: [github.com/conghui/replaycode](https://github.com/conghui/replaycode)
+
+**We're looking for contributors in:**
+- **Interactive mode** — Get the Ink/React terminal UI working end-to-end
+- **MCP support** — Connect to Model Context Protocol servers
+- **Tool expansion** — Implement the 17 unreleased tools we've discovered in the source
+- **Multi-agent** — Build out the coordinator/worker agent system
+- **Testing** — Add comprehensive test coverage
+- **Documentation** — Translate analysis reports, write tutorials
+
+Whether you're a seasoned systems engineer or a curious student — if you want to understand how production agentic coding tools work from the inside out, **this is the project to contribute to**.
 
 ---
 

@@ -32,7 +32,7 @@ npm --version    # >= 9
 ### Steps
 
 ```bash
-cd claude-code-2.1.88/
+cd replaycode/
 
 # 1. Install build dependency
 npm install --save-dev esbuild
@@ -106,7 +106,7 @@ curl -fsSL https://bun.sh/install | bash
 ## Project Structure
 
 ```
-claude-code-2.1.88/
+replaycode/
 ├── src/                  # Original TypeScript source (1,884 files, 512K LOC)
 ├── stubs/                # Build stubs for Bun compile-time intrinsics
 │   ├── bun-bundle.ts     #   feature() stub → always returns false
